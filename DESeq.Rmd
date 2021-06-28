@@ -1,0 +1,334 @@
+---
+title: "DESeq_Script"
+author: "Chris"
+date: "31/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+#Files required to run:
+
+
+BIOL448J_Functions.R 
+pairwise.adonis.r
+my_colours.R 
+Prenatal_alcohol_exposure_16S_otu_table.txt
+Prenatal_alcohol_exposure_metadata.txt
+
+
+
+### Details about the user input variables:
+If you would like to group the data by a varible (can contain >2 options to filter by), please specifiy this in the "highlight_var" input. 
+
+"Variable_to_filter_by" and "filter_by" are inputs requried if you would like to analyze a subset of your data. You can filter by up to 2 variables. If you do not require both or either filtering options, leave blank spaces. However, upon usage, "Variable_to_filter_by" requires the column name of the data intended to filter, and "filter_by" requires the string within that column to subset. 
+
+Ex, highlight_var  = "prenatal_group"
+    variable_to_filter_by1 = "sex"
+    filter_by1 = "Female"
+    variable_to_filter_by2 = "drug_group"
+    filter_by2 = "No drug"
+```{r, Input Variabels, include=TRUE, echo=FALSE}
+highlight_var  = "sex"
+variable_to_filter_by1 = "prenatal_group"
+filter_by1 = "Ethanol"
+variable_to_filter_by2 = "drug_group"
+filter_by2 = "No drug"
+
+```
+
+
+```{r, Set variables and please dont change, include=TRUE, echo=FALSE}
+
+otu_file       = "Prenatal_alcohol_exposure_16S_otu_table.txt"
+metadata_file  = "Prenatal_alcohol_exposure_metadata.txt"
+files_are_csv  = FALSE
+sample_ID_col  = "MI_ID"
+otu_as_rows    = TRUE
+otu_col_to_ignore = c(1:2,68:75)
+otu_row_to_ignore = c()
+
+```
+
+Loading libraries and functions from other scripts
+```{r, Source Functions, include=TRUE, echo=FALSE}
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#install.packages("BiocManager")
+
+#BiocManager::install("DESeq2")
+#BiocManager::install("phyloseq")
+
+library(tidyverse)
+library(vegan)
+library(gridExtra)
+library(phyloseq)
+library(labdsv)
+library(indicspecies)
+library(DESeq2)
+
+
+
+source("BIOL448J_Functions.R") #Loading functions written by Illan Rubin (2019 TA for BIO448). Used for alpha diversity.
+source("pairwise.adonis.r") #Loading parwiseadonis function also provided by Illan Rubin.
+source("my_colours.R")  #loading subsets of manual colours used for plotting.
+```
+
+Creates a unique dataset name based on the user filter variables specified above
+```{r, Dataset Name, include=TRUE, echo=FALSE}
+dataset_name = paste("PAE-",highlight_var,"-",filter_by1,filter_by2,sep = "")
+```
+
+Reading in input files (count matrix and metadata)
+```{r, Reading Files Into R, include=TRUE, echo=FALSE}
+  otu_table = read.table(otu_file,header = TRUE,sep = "\t")
+  metadata_table = read.table(metadata_file,header = TRUE,sep = "\t")
+  rownames(otu_table) <- paste("OTU",otu_table[,1],sep = "")
+```
+
+
+```{r, Fixing Data so Metadata Matches OTU, include=TRUE, echo=FALSE}
+
+PAE_otu_t <- as.data.frame(t(otu_table[,(3:67)]))
+PAE_taxa <- as.matrix((otu_table[,(68:75)]))
+PAE_otu_t$MI_ID <- rownames(PAE_otu_t)
+
+#sorting by MI_ID columns
+
+PAE_metadata_sorted <- metadata_table[order(metadata_table$MI_ID),]
+PAE_otu_t_sorted <- PAE_otu_t[order(PAE_otu_t$MI_ID),]
+
+
+#removing the blank13 and 40 from OTUdata
+
+PAE_metadata_sorted <- PAE_metadata_sorted[-(1),]
+PAE_metadata_sorted <- PAE_metadata_sorted[-(40),]
+
+#combined metadata and OTU data and specifying vectors for col and metadata used later on.
+PAE <-as.data.frame(cbind(PAE_metadata_sorted,PAE_otu_t_sorted))
+PAE <- PAE[,-ncol(PAE)]
+PAE_meta_col <-c(1,2,3,4,5,6,7,8)
+PAE_otu_col <-9:440 
+
+
+
+```
+
+
+The filtering step based on user filter variables at the beginning.
+```{r, Filtering by user input, include=TRUE, echo=FALSE}
+set.seed(192)
+if (filter_by1 != "" && filter_by2 != ""){
+  PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by1]] == filter_by1) 
+  
+  PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by2]] == filter_by2)
+      
+  
+} else if (filter_by1 != ""){
+      PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by1]] == filter_by1)
+      
+  
+} else if (filter_by2 != ""){
+      PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by2]] == filter_by2)
+      
+} 
+
+#highlight_var = "legend"
+#PAE_metadata_sorted$legend = paste(PAE_metadata_sorted$sex,PAE_metadata_sorted$prenatal_group)
+
+#Running permanova 
+PAE_permanova <- adonis(as.formula(paste("PAE[,-PAE_meta_col] ~",highlight_var)),data=PAE[,PAE_meta_col])
+PAE_permanova
+
+pairwise_table <- table(pairwise.adonis(PAE[,-PAE_meta_col],PAE[,PAE_meta_col][[highlight_var]]))
+```
+
+```{r, gathering all data in phyloseq format, include=TRUE, echo=FALSE}
+
+otu_plus1 <- PAE[,-PAE_meta_col]+1   #Adding 1 to each value as a pseudocount 
+PAE_otu_phyloseq <- otu_table(otu_plus1,taxa_are_rows = FALSE)
+PAE_metadata_phyloseq <- sample_data(PAE[,PAE_meta_col])
+PAE_taxonomy_phyloseq <- tax_table(PAE_taxa)
+
+#Creating a phyloseq object for the DEseq analysis.
+PAE_phyloseq <- phyloseq(PAE_otu_phyloseq,PAE_metadata_phyloseq,PAE_taxonomy_phyloseq)
+sample_data(PAE_phyloseq)
+```
+
+```{r, Running DEseq Analysis , include=TRUE, echo=FALSE}
+
+#Running DESEQ on the phyloseq object
+PAE_DEseq <- phyloseq_to_deseq2(PAE_phyloseq, design = as.formula(paste("~",highlight_var)))
+PAE_DEseq <- DESeq(PAE_DEseq,test="Wald",fitType="parametric")
+
+PAE_DEseq_results <- results(PAE_DEseq)
+
+#Combinding the results output with taxa information.
+PAE_DEseq_results <- data.frame(cbind(PAE_DEseq_results,PAE_taxa))
+```
+
+
+
+```{r, Plotting differential abundance for all genus}
+DEseqbeforefilter <- ggplot(PAE_DEseq_results,aes(x=Rank6,y=log2FoldChange,color=Rank6))+
+  geom_bar(stat = "identity") +
+  geom_hline(yintercept = 0)+
+  theme(legend.position = "none")+
+  theme(axis.text.x = element_text(angle = 90,hjust = 0,vjust = 0.5))
+
+pdf(paste(dataset_name,"-DEseq before filtering.pdf"))
+
+DEseqbeforefilter
+ 
+dev.off()
+```
+
+Each point represents a specific OTU assignment. Multiple points are seen within a single genus (x axis) because that genus contains several unique species identifications each with a different Lag2FolgChange value. 
+Filtering DESEQ results by significance of 0.05 and removing 
+```{r, Filtering for differential abundances with pvalue < 0.05 and removing rows with missing taxomony calls, include=TRUE, echo=FALSE}
+PAE_DEseq_results_sig <- filter(PAE_DEseq_results,padj<0.05)
+PAE_DEseq_results_sig_narm <- filter(PAE_DEseq_results_sig)
+```
+only removed NAs to rank 6 because that is the genus level and we arent looking at the species level at all. mostly because they mostly identify as unculturem_bacterium
+```{r, Taking the Mean of each genus, include=TRUE, echo=FALSE}
+PAE_DEseq_results_genus_summary<-PAE_DEseq_results_sig_narm %>%
+  group_by(Rank6,Rank5,Rank4,Rank3,Rank2) %>%
+  select(Rank6,Rank5,Rank4,Rank3,Rank2,log2FoldChange,padj,baseMean,pvalue) %>%
+  dplyr::summarise(mean_2_fold_change=mean(log2FoldChange),padj=combine_pvalues(padj),countmean = mean(baseMean),pvalue=combine_pvalues(pvalue))
+
+```
+
+```{r, Taking the Mean of each Family, include=TRUE, echo=FALSE}
+PAE_DEseq_results_family_summary<-PAE_DEseq_results_sig_narm %>%
+  group_by(Rank5,Rank4,Rank3,Rank2) %>%
+  select(Rank5,Rank4,Rank3,Rank2,log2FoldChange,padj,baseMean,pvalue) %>%
+  dplyr::summarise(mean_2_fold_change=mean(log2FoldChange),padj=combine_pvalues(padj),countmean = mean(baseMean),pvalue=combine_pvalues(pvalue))
+```
+
+```{r, Taking the Mean of each order, include=TRUE, echo=FALSE}
+PAE_DEseq_results_order_summary<-PAE_DEseq_results_sig_narm %>%
+  group_by(Rank4,Rank3,Rank2) %>%
+  select(Rank4,Rank3,Rank2,log2FoldChange,padj,baseMean,pvalue) %>%
+  dplyr::summarise(mean_2_fold_change=mean(log2FoldChange),padj=combine_pvalues(padj),countmean = mean(baseMean),pvalue=combine_pvalues(pvalue))
+```
+
+```{r, Taking the Mean of each class, include=TRUE, echo=FALSE}
+PAE_DEseq_results_class_summary<-PAE_DEseq_results_sig_narm %>%
+  group_by(Rank3,Rank2) %>%
+  select(Rank3,Rank2,log2FoldChange,padj,baseMean,pvalue) %>%
+  dplyr::summarise(mean_2_fold_change=mean(log2FoldChange),padj=combine_pvalues(padj),countmean = mean(baseMean),pvalue=combine_pvalues(pvalue))
+```
+
+```{r, Taking the Mean of each phyla, include=TRUE, echo=FALSE}
+PAE_DEseq_results_phyla_summary<-PAE_DEseq_results_sig_narm %>%
+  group_by(Rank2) %>%
+  select(Rank2,log2FoldChange,padj,baseMean,pvalue) %>%
+  dplyr::summarise(mean_2_fold_change=mean(log2FoldChange),padj=combine_pvalues(padj),countmean = mean(baseMean),pvalue=combine_pvalues(pvalue))
+```
+
+
+This is just some nonsense I saved for plotting difference comparisons due to different output tables.
+
+PAE_DEseq_results_genus_summary$Rank6 <- gsub('GCA-900066575', 'NA', PAE_DEseq_results_genus_summary$Rank6)
+PAE_DEseq_results_genus_summary$Rank6 <- gsub('uncultured_bacterium', 'NA ', PAE_DEseq_results_genus_summary$Rank6)
+PAE_DEseq_results_genus_summary$Rank6 <- gsub('uncultured_Mollicutes_bacterium', 'NA  ', PAE_DEseq_results_genus_summary$Rank6)
+PAE_DEseq_results_genus_summary[15,1] <- "NA    "
+PAE_DEseq_results_genus_summary[16,1] <- "NA     "
+PAE_DEseq_results_genus_summary[17,1] <- "NA      "
+                        Male and female
+                                c("#0dc34e",
+                                "#C011D7",
+                                "#e24223",
+                                "#FFA52C",
+                                "#000000")
+                                
+                                Males
+                                c("#2F3CBE",
+                                "#0dc34e",
+                                "#e24223",
+                                "#86007D")
+                                
+                                females
+                                c(
+                                "#0dc34e",
+                                "#074E24",
+                                "#e24223",
+                                "#349CA5")
+
+```{r, Plotting differential abundance at the genus level}
+PAE_DEseq_results_genus_summary[10,1] <- "NA    "
+PAE_DEseq_results_genus_summary[9,1] <- "NA     "
+PAE_DEseq_results_genus_summary[8,1] <- "NA      "
+
+
+
+
+DEseqafterfiltergenus <- ggplot(PAE_DEseq_results_genus_summary,aes(x=reorder(Rank6, -mean_2_fold_change),y=mean_2_fold_change,color = Rank2))+
+  geom_point(size=3.5) +
+  geom_hline(yintercept = 0,size=1)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90,hjust = 0,vjust = 0.5),
+        text = element_text(face = "bold",size=15),
+        axis.text.x.bottom  = element_text(size=12,angle = -45),)+
+  scale_color_manual(values = c(
+                                "#0dc34e",
+                                "#074E24",
+                                "#e24223",
+                                "#349CA5"))+
+  labs(x="Genus",y="Log2 Fold Change",color= "Phylum")+
+  ggtitle(paste(filter_by1))
+
+ggsave(paste(dataset_name,"-DEseq after filtering (genus).png"),plot= DEseqafterfiltergenus)
+
+```
+
+```{r, Plotting differential abundance at the family level}
+
+PAE_DEseq_results_family_summary <- PAE_DEseq_results_family_summary[-c(11:12),]
+
+DEseqafterfilterfamily <- ggplot(PAE_DEseq_results_family_summary,aes(x=reorder(Rank5, -mean_2_fold_change),y=mean_2_fold_change,color = Rank2))+
+  geom_point(size=3.5) +
+  geom_hline(yintercept = 0,size=1)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90,hjust = 0,vjust = 0.5),
+        text = element_text(face = "bold",size=12),
+        axis.text.x.bottom  = element_text(size=9,angle = -45))+
+  scale_fill_manual(values = colours_12)+
+  labs(x="Family",y="Average Log2 Fold Change",color= "Phylum")
+
+pdf(paste(dataset_name,"-DEseq after filtering (family).pdf"))
+
+DEseqafterfilterfamily
+ 
+dev.off()
+```
+
+```{r, plotting differential abundance at the phylum level}
+DEseqafterfilterphylum <- ggplot(PAE_DEseq_results_phyla_summary,aes(x=reorder(Rank2, -mean_2_fold_change),y=mean_2_fold_change,color = Rank2))+
+  geom_point(size=3.5) +
+  geom_hline(yintercept = 0,size=1)+
+  theme_bw()+
+  theme(axis.text.x = element_text(angle = -90,hjust = 0,vjust = 0.5),
+        text = element_text(face = "bold",size=12),
+        legend.position = "none",
+        axis.text.x.bottom  = element_text(size=9,angle = -45))+
+  scale_color_manual(values = c("#426df7", 
+                                "#0dc34e",
+                                "#e24223",
+                                "#86007D"))+
+  labs(x="Phylum",y="Log2 Fold Change",color= "Phylum")+
+  ggtitle(paste(filter_by1))
+
+ggsave(paste(dataset_name,"-DEseq after filtering (phylum).jpeg"),plot= DEseqafterfilterphylum)
+
+```

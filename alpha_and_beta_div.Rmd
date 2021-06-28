@@ -1,0 +1,369 @@
+---
+title: "DESeq_Script"
+author: "Chris"
+date: "31/05/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+
+#Files required to run:
+
+
+BIOL448J_Functions.R 
+pairwise.adonis.r
+my_colours.R 
+Prenatal_alcohol_exposure_16S_otu_table.txt
+Prenatal_alcohol_exposure_metadata.txt
+
+
+
+### Details about the user input variables:
+If you would like to group the data by a varible (can contain >2 options to filter by), please specifiy this in the "highlight_var" input. 
+
+"Variable_to_filter_by" and "filter_by" are inputs requried if you would like to analyze a subset of your data. You can filter by up to 2 variables. If you do not require both or either filtering options, leave blank spaces. However, upon usage, "Variable_to_filter_by" requires the column name of the data intended to filter, and "filter_by" requires the string within that column to subset. 
+
+Ex, highlight_var  = "prenatal_group"
+    variable_to_filter_by1 = "sex"
+    filter_by1 = "Female"
+    variable_to_filter_by2 = "drug_group"
+    filter_by2 = "No drug"
+```{r, Input Variabels, include=TRUE, echo=FALSE}
+highlight_var  = "prenatal_group"
+variable_to_filter_by1 = ""
+filter_by1 = ""
+variable_to_filter_by2 = "drug_group"
+filter_by2 = "No drug"
+
+```
+
+
+```{r, Set variables and please dont change, include=TRUE, echo=FALSE}
+
+otu_file       = "Prenatal_alcohol_exposure_16S_otu_table.txt"
+metadata_file  = "Prenatal_alcohol_exposure_metadata.txt"
+files_are_csv  = FALSE
+sample_ID_col  = "MI_ID"
+otu_as_rows    = TRUE
+otu_col_to_ignore = c(1:2,68:75)
+otu_row_to_ignore = c()
+
+```
+
+Loading libraries and functions from other scripts
+```{r, Source Functions, include=TRUE, echo=FALSE}
+
+
+#if (!requireNamespace("BiocManager", quietly = TRUE))
+#install.packages("BiocManager")
+
+#BiocManager::install("DESeq2")
+#BiocManager::install("phyloseq")
+
+library(tidyverse)
+library(vegan)
+library(gridExtra)
+library(labdsv)
+library(indicspecies)
+
+
+
+
+source("BIOL448J_Functions.R") #Loading functions written by Illan Rubin (2019 TA for BIO448). Used for alpha diversity.
+source("pairwise.adonis.r") #Loading parwiseadonis function also provided by Illan Rubin.
+source("my_colours.R")  #loading subsets of manual colours used for plotting.
+```
+
+Creates a unique dataset name based on the user filter variables specified above
+```{r, Dataset Name, include=TRUE, echo=FALSE}
+dataset_name = paste("PAE-",highlight_var,"-",filter_by1,filter_by2,sep = "")
+```
+
+Reading in input files (count matrix and metadata)
+```{r, Reading Files Into R, include=TRUE, echo=FALSE}
+  otu_table = read.table(otu_file,header = TRUE,sep = "\t")
+  metadata_table = read.table(metadata_file,header = TRUE,sep = "\t")
+  rownames(otu_table) <- paste("OTU",otu_table[,1],sep = "")
+```
+
+
+```{r, Fixing Data so Metadata Matches OTU, include=TRUE, echo=FALSE}
+
+PAE_otu_t <- as.data.frame(t(otu_table[,(3:67)]))
+PAE_taxa <- as.matrix((otu_table[,(68:75)]))
+PAE_otu_t$MI_ID <- rownames(PAE_otu_t)
+
+#sorting by MI_ID columns
+
+PAE_metadata_sorted <- metadata_table[order(metadata_table$MI_ID),]
+PAE_otu_t_sorted <- PAE_otu_t[order(PAE_otu_t$MI_ID),]
+
+
+#removing the blank13 and 40 from OTUdata
+
+PAE_metadata_sorted <- PAE_metadata_sorted[-(1),]
+PAE_metadata_sorted <- PAE_metadata_sorted[-(40),]
+
+#combined metadata and OTU data and specifying vectors for col and metadata used later on.
+PAE <-as.data.frame(cbind(PAE_metadata_sorted,PAE_otu_t_sorted))
+PAE <- PAE[,-ncol(PAE)]
+PAE_meta_col <-c(1,2,3,4,5,6,7,8)
+PAE_otu_col <-9:440 
+
+
+
+```
+
+
+The filtering step based on user filter variables at the beginning.
+```{r, Filtering by user input, include=TRUE, echo=FALSE}
+
+if (filter_by1 != "" && filter_by2 != ""){
+  PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by1]] == filter_by1) 
+  
+  PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by2]] == filter_by2)
+      
+  
+} else if (filter_by1 != ""){
+      PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by1]] == filter_by1)
+      
+  
+} else if (filter_by2 != ""){
+      PAE = PAE %>%
+  filter(PAE[[variable_to_filter_by2]] == filter_by2)
+      
+} 
+```
+
+
+```{r, Calculating Alpha Diveristy Measures, include=TRUE, echo=FALSE}
+alphameasures = run_all_diversity(PAE,species_col = -PAE_meta_col, filter_by = highlight_var)
+```
+
+```{r, Plotting Alpha Diveristy Measures, include=TRUE, echo=FALSE}
+my_colours2 = c("#98984d",
+              "#b3669e")
+richness_index = ggplot(alphameasures,aes(get(highlight_var), richness, fill = get(highlight_var)))+
+  geom_bar(stat = "identity",position = "dodge",width = 0.7)+
+  lims(y=c(0,500))+
+  theme_classic()+
+  theme(text = element_text(face = "bold",size=15))+
+  ggtitle("Richness")+scale_fill_manual(values = my_colours2)
+
+shannons_index = ggplot(alphameasures,aes(get(highlight_var), shannons, fill = get(highlight_var)))+
+  geom_bar(stat = "identity",position = "dodge",width = 0.7)+
+  lims(y=c(0,10))+
+  theme_classic()+
+  theme(text = element_text(face = "bold",size=15))+
+  ggtitle("Shannons")+
+  scale_fill_manual(values = my_colours2)
+
+
+invsim_index = ggplot(alphameasures,aes(get(highlight_var), inv_simpsons, fill = get(highlight_var)))+
+  geom_bar(stat = "identity",position = "dodge",width = 0.7)+
+  lims(y=c(0,35))+
+  theme_classic()+
+  theme(text = element_text(face = "bold",size=15))+
+  ggtitle("Inverse Simpsons")+
+  scale_fill_manual(values = my_colours2)
+
+chao1_index = ggplot(alphameasures,aes(get(highlight_var), chao1, fill = get(highlight_var)))+
+  geom_bar(stat = "identity",position = "dodge",width = 0.7)+
+  lims(y=c(0,500))+
+  theme_classic()+
+  theme(text = element_text(face = "bold",size=15))+
+  ggtitle("Chao1")+
+  scale_fill_manual(values = my_colours2)
+
+
+pdf(paste(dataset_name,"-Alpha Diveristy.pdf"))
+    
+grid.arrange(richness_index,shannons_index,invsim_index,chao1_index,nrow = 2,ncol = 2)
+ 
+dev.off()
+```
+
+
+
+```{r, Plotting Stress values across Dimensions, include=TRUE, echo=FALSE}
+PAE_MDSdim<-checkMDSdim((PAE[-PAE_meta_col]),iter = 5)
+
+plot_stress = ggplot(PAE_MDSdim, aes(dimension, stress))+
+  geom_point(size = 2)+
+  theme_classic()+
+  theme(text = element_text(size=15,face = "bold"))
+```
+
+```{r, NMDS plot, include=TRUE, echo=FALSE }
+PAE_MDS <- metaMDS(PAE[-PAE_meta_col])
+PAE_MDSmeta = data.frame(cbind(PAE[,PAE_meta_col],PAE_MDS$points))
+
+
+plot_MDS = ggplot(PAE_MDSmeta, aes(x = MDS1,y = MDS2))+
+  geom_point(aes_string(color=highlight_var),size = 3)+
+  coord_fixed()+
+  theme_classic()+
+  theme(text = element_text(size = 15, face = "bold"))
+
+
+
+
+if (highlight_var != ""){
+  MDS_centroid = calculate_ellipse(PAE_MDSmeta,filter_by = highlight_var)
+  plot_MDS = plot_MDS   +   geom_path(data=MDS_centroid,mapping = aes(colour = filter),size =1.25)
+
+}
+
+```
+
+```{r, Relative Abundance Analysis, include=TRUE, echo=FALSE}
+meta <- PAE[,PAE_meta_col]
+otu <- PAE[,-PAE_meta_col]
+
+meta$total_abundance <- rowSums(PAE[,-PAE_meta_col])
+
+otu_and_metadata <- as.data.frame(cbind(meta,otu))
+
+PAE_grouped <- gather(otu_and_metadata, key = "ASV",value = "abundance",-(1:10))
+
+
+PAE_grouped$legend = paste(PAE_grouped$prenatal_group, PAE_grouped$sex)
+
+PAE_taxa <- as.data.frame(PAE_taxa)
+PAE_taxa$ASV <- rownames(PAE_taxa)
+PAE_sum <- inner_join(PAE_grouped,PAE_taxa,by = "ASV")
+PAE_sum$relative_abundance <- PAE_sum$abundance/PAE_sum$total_abundance
+
+```
+
+```{r, Plotting Relative Abundance for top 50 grouped by phylum, include=TRUE, echo=FALSE}
+
+
+PAE_taxa_abundance <- colSums(PAE[,-PAE_meta_col])
+
+N=50
+
+top_N_taxa <- names(sort(PAE_taxa_abundance,decreasing = TRUE)[1:N])
+
+PAE_top_50 <- filter(PAE_sum, ASV %in% top_N_taxa)
+
+
+
+Phylum_counts <- PAE_top_50 %>%
+  group_by(Rank2,MI_ID,prenatal_group) %>%
+  summarise(sum =sum(relative_abundance))
+
+#names(Phylum_counts)[2] <- "Phylum" 
+
+highlight_var = "prenatal_group"
+plot1 = ggplot(Phylum_counts,aes(x=MI_ID,y=sum,fill=Rank2))+
+  geom_bar(stat = "identity",color="black") +
+  facet_grid(as.formula(paste("~",highlight_var)),scales = "free", space = "free")+
+  theme(axis.text = element_text(face="bold",size= 7),
+        text = element_text(face = "bold",size = 12),
+        axis.text.x.bottom = element_blank())+
+  labs(x="", y= " Relative Abundance (%)")+
+  scale_fill_manual(values = c("#c9578c",
+"#85a040",
+"#8475ca",
+"#cb7041",
+"#4bae8d"))
+
+ggsave("grouped_by_phylum.jpeg", plot = plot1)
+
+```
+
+```{r, Plotting Relative Abundance for the top 50 OTUs, include=TRUE, echo=FALSE}
+
+PAE_taxa_abundance <- colSums(PAE[,-PAE_meta_col])
+
+N=50
+
+top_N_taxa <- names(sort(PAE_taxa_abundance,decreasing = TRUE)[1:N])
+
+PAE_top_25 <- filter(PAE_sum, ASV %in% top_N_taxa)
+
+
+Phylum_counts <- PAE_top_25 %>%
+  group_by(legend) %>%
+  summarise(sum =sum(abundance))
+
+names(Phylum_counts)[2] <- "Phylum" 
+
+#to group by sex too, use ~legend instead of fomula.as(paste())
+ggplot(PAE_top_25,aes(x=MI_ID,y=relative_abundance,fill=Rank6))+
+  geom_bar(stat = "identity",color="black") +
+  facet_grid(~legend,scales = "free", space = "free")+
+  theme_bw()+
+  theme(axis.text = element_text(face="bold",size= 7),
+        text = element_text(face = "bold",size = 12),
+        axis.text.x.bottom = element_text(face = "bold",size = 11),
+        legend.position = "none",
+        axis.title.x=element_blank(),
+        axis.ticks.x=element_blank())+
+  labs(x="", y= " Relative Abundance (%)")+
+  scale_fill_manual(values = c("#b78226",
+"#5e67d9",
+"#3cc755",
+"#c66ae2",
+"#72be3e",
+"#8b45b5",
+"#a5bb36",
+"#d53ea4",
+"#41932d",
+"#df316d",
+"#5ec16b",
+"#a04395",
+"#d8b42e",
+"#5f87d8",
+"#ea952a",
+"#5c5b9f",
+"#b8a73d",
+"#b07fd9",
+"#799837",
+"#e678c5",
+"#4cc892",
+"#dd4c2b",
+"#36bddc",
+"#ac3d1b",
+"#48c5bb",
+"#cb3a48",
+"#35997f",
+"#b83c78",
+"#529c5e",
+"#e6648a",
+"#357838",
+"#b39cdc",
+"#456d19",
+"#a25f92",
+"#71781e",
+"#589ed3",
+"#db742f",
+"#277257",
+"#e87159",
+"#367042",
+"#dd8aaf",
+"#536c31",
+"#a23e5a",
+"#7bbd94",
+"#8d495e",
+"#a5bc72",
+"#dd8081",
+"#605f23",
+"#d88860",
+"#8b9151",
+"#a0513d",
+"#e1b05a",
+"#a35a22",
+"#dda875",
+"#7e611b",
+"#a07e47"))
+```
